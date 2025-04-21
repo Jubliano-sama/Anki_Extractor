@@ -39,9 +39,14 @@ def load_cfg(path=CFG_PATH):
         'max_tokens': cp.getint('llm_example', 'max_tokens', fallback=80),
         'prompt': cp.get('llm_example', 'prompt', fallback="You are to provide a simple example sentence using '{word}' for an Anki vocab list. The definition is: '{definition}'. Write one natural, concise and simple example sentence that aligns with this specific meaning. Do not include any other words in the sentence which may be non-trivial. React only with the sentence. If context is provided, consider it: {context}")
     }
-    return key, model, def_params, ex_params
+    senses_params = {
+        'temperature': cp.getfloat('llm_word_senses', 'temperature', fallback=0.2),
+        'max_tokens': cp.getint('llm_word_senses', 'max_tokens', fallback=128),
+        'prompt': cp.get('llm_word_senses', 'prompt', fallback=None)
+    }
+    return key, model, def_params, ex_params, senses_params
 
-OR_API_KEY, OR_MODEL, DEF_PARAMS, EX_PARAMS = load_cfg()
+OR_API_KEY, OR_MODEL, DEF_PARAMS, EX_PARAMS, SENSES_PARAMS = load_cfg()
 
 # ---------------------------------------------------------------------------#
 # Helper Functions                                                          #
@@ -80,7 +85,14 @@ def llm_call(prompt, max_tokens, temperature):
     r.raise_for_status()
     return r.json()['choices'][0]['message']['content'].strip()
 
+def extract_sense(word):
+    match = re.match(r'(.+?)\s*\((.+?)\)$', word.strip())
+    if match:
+        return match.group(1), match.group(2)
+    return word, None
+
 def gen_definition(word, ctx=None):
+    
     prompt = DEF_PARAMS['prompt'].format(word=word)
     if ctx:
         prompt += f"\ncontext: {ctx}"
@@ -120,23 +132,15 @@ def pregen_definitions(words, corpus_text, num_workers=5):
             print(f"Generated definition for '{word}' ({i}/{len(words)})")
     return pregen_defs
 
-def parse_definitions(def_text, word):
-    items = [item.strip() for item in re.split(r'^\d+\.\s*', def_text, flags=re.MULTILINE) if item.strip()]
-    if len(items) > 1:
-        split_words = []
-        for i, item in enumerate(items, 1):
-            if ':' in item:
-                parts = item.split(':', 1)
-                label = parts[0].strip('() ')
-                definition = parts[1].strip()
-                new_word = f"{word} ({label})"
-            else:
-                definition = item.strip()
-                new_word = f"{word} (sense {i})"
-            split_words.append((new_word, definition))
-        return split_words
-    else:
-        return [(word, def_text)]
+def parse_senses(response):
+    """Parse the LLM response into a list of word variants with labels."""
+    senses = []
+    for line in response.split('\n'):
+        match = re.match(r'\d+\.\s*(.+)', line.strip())
+        if match:
+            word_variant = match.group(1).strip()
+            senses.append(word_variant)
+    return senses
 
 # ---------------------------------------------------------------------------#
 # CLI Mode                                                                  #
@@ -311,22 +315,41 @@ class Wizard:
 
     def split_word(self):
         word = self.current_word()
-        def_text = self.def_txt.get('1.0', 'end').strip()
-        new_entries = parse_definitions(def_text, word)
-        if len(new_entries) > 1:
-            # Remove current word
-            del self.words[self.i]
-            del self.orig_words[self.i]
-            del self.data[self.i]
-            # Insert new words
-            for j, (new_word, definition) in enumerate(new_entries):
-                self.words.insert(self.i + j, new_word)
-                self.orig_words.insert(self.i + j, new_word)
-                self.data.insert(self.i + j, {'word': new_word, 'text': definition, 'card_type': 'b'})
-            # Show the first new word
-            self.show()
-        else:
-            messagebox.showinfo("Info", "No multiple definitions found to split.")
+        # Retrieve the current definition from the text area
+        definition = self.def_txt.get('1.0', 'end').strip()
+        # Check if the prompt requires a definition and if it's missing
+        if '{definition}' in SENSES_PARAMS['prompt'] and not definition:
+            messagebox.showwarning("Warning", "Definition is required for splitting.")
+            return
+        # Prepare format dictionary with word and optionally definition
+        format_dict = {'word': word}
+        if '{definition}' in SENSES_PARAMS['prompt']:
+            format_dict['definition'] = definition
+        try:
+            # Format the prompt with the available parameters
+            prompt = SENSES_PARAMS['prompt'].format(**format_dict)
+        except KeyError as e:
+            messagebox.showerror("Error", f"Missing placeholder in prompt: {e}")
+            return
+        try:
+            # Call the language model to get the list of senses
+            response = llm_call(prompt, SENSES_PARAMS['max_tokens'], SENSES_PARAMS['temperature'])
+            word_variants = parse_senses(response)
+            if len(word_variants) > 1:
+                # Replace the current word with the new variants
+                del self.words[self.i]
+                del self.orig_words[self.i]
+                del self.data[self.i]
+                for j, word_variant in enumerate(word_variants):
+                    self.words.insert(self.i + j, word_variant)
+                    self.orig_words.insert(self.i + j, word_variant)
+                    self.data.insert(self.i + j, {'word': word_variant, 'text': '', 'card_type': 'b'})
+                self.show()
+                return
+            else:
+                messagebox.showinfo("Info", "Only one sense found; not splitting.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to get senses from LLM: {e}")
 
     def save_current(self):
         if self.i < len(self.words):
