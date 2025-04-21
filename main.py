@@ -17,8 +17,30 @@ with contextlib.suppress(ImportError):
     from tkinter import filedialog, messagebox, ttk
 
 # ---------------------------------------------------------------------------#
-# Config                                                                    #
+# Config   
+# example:
+'''
+[openrouter]
+api_key = [PLACEHOLDER]
+model = openai/gpt-4.1
+
+[llm_definition]
+temperature = 0.7
+max_tokens = 64
+prompt = You are to define a word for an Anki vocab list. Give a concise dictionary-style definition for '{word}', which is part of a book. Please make sure the definition does not contain any words which may be non-trivial themselves. The context in which it appears is given. Do not include the word in the definition. You may include multiple definitions in a numbered list if appropriate, but do not use a numbered list for a singular definition If and only if there are common synonyms, please provide them prepended by 'syn: ' at the end seperated by commas.
+
+[llm_example]
+prompt = You are to provide a simple example sentence using '{word}' for an Anki vocab list. The definition is: '{definition}'. Write one natural, concise and simple example sentence that aligns with this specific meaning, or write multiple in a numbered list if and only if there are multiple definitions. Do not include any other words in the sentence which may be non-trivial. React only with the sentence. If context is provided, consider it: {context}
+temperature = 1.0
+max_tokens = 80
+
+[llm_word_senses]
+temperature = 0
+max_tokens = 128
+prompt = You are to provide a numbered list of different meanings for the word '{word}' given its definition: '{definition}', each with a concise label in parentheses. For example, for 'bank', you might write: 1. bank (finance) 2. bank (river) 3. bank (aviation) Please provide the numbered list for '{word}'. Please only provide the core senses, nothing redundant.                                                                 #
+'''
 # ---------------------------------------------------------------------------#
+
 
 CFG_PATH = Path(__file__).with_name('config.ini')
 
