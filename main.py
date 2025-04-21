@@ -100,7 +100,7 @@ def gen_definition(word, ctx=None):
 
 def gen_example(word, definition, ctx=None):
     prompt = EX_PARAMS['prompt'].format(word=word, definition=definition, context=ctx or '')
-    return llm_call(prompt, EX_PARAMS['max_tokens'], EX_PARAMS['temperature'])
+    return 'example: ' + llm_call(prompt, EX_PARAMS['max_tokens'], EX_PARAMS['temperature'])
 
 def load_book_text(path: Path) -> str:
     ext = path.suffix.lower()
