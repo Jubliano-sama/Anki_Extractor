@@ -115,7 +115,7 @@ def load_book_text(path: Path) -> str:
         return "\n".join(pg.extract_text() or '' for pg in pdf.pages)
     raise RuntimeError(f"Unsupported book type: {ext}")
 
-def find_contexts(text: str, word: str, span: int = 120, max_ctx: int = 8):
+def find_contexts(text: str, word: str, span: int = 100, max_ctx: int = 8):
     rgx = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
     return [text[max(0, m.start() - span):m.end() + span].replace('\n', ' ').strip()
             for m in list(rgx.finditer(text))[:max_ctx]]
@@ -204,10 +204,10 @@ def write_anki(cards):
     revs = [(w, d) for w, d, t in cards if t == 'br']
     if basics:
         with open('anki_basic.csv', 'w', newline='', encoding='utf-8') as f:
-            csv.writer(f).writerows([["front", "back"], *basics])
+            csv.writer(f).writerows([*basics])
     if revs:
         with open('anki_basic_reversed.csv', 'w', newline='', encoding='utf-8') as f:
-            csv.writer(f).writerows([["front", "back"], *revs])
+            csv.writer(f).writerows([*revs])
 
 # ---------------------------------------------------------------------------#
 # GUI Mode                                                                  #
@@ -265,7 +265,7 @@ class Wizard:
         navfrm.grid(row=4, column=0, columnspan=3, pady=4, sticky='ew')
         ttk.Button(navfrm, text="Prev", command=self.prev).pack(side='left', padx=2)
         ttk.Button(navfrm, text="Next", command=self.next).pack(side='left', padx=2)
-        self.card_type = tk.StringVar(value='b')
+        self.card_type = tk.StringVar(value='br')
         ttk.Radiobutton(navfrm, text='Basic', variable=self.card_type, value='b').pack(side='left', padx=2)
         ttk.Radiobutton(navfrm, text='Reverse', variable=self.card_type, value='br').pack(side='left', padx=2)
         ttk.Radiobutton(navfrm, text='Skip', variable=self.card_type, value='n').pack(side='left', padx=2)
