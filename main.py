@@ -25,7 +25,7 @@ CFG_PATH = Path(__file__).with_name('config.ini')
 def load_cfg(path=CFG_PATH):
     cp = configparser.ConfigParser()
     cp.read(path, encoding='utf-8')
-    key   = cp.get('openrouter', 'api_key', fallback='').strip()
+    key = cp.get('openrouter', 'api_key', fallback='').strip()
     model = cp.get('openrouter', 'model', fallback='').strip()
     if not key or not model:
         raise RuntimeError('OpenRouter api_key or model missing in config.ini')
@@ -37,7 +37,7 @@ def load_cfg(path=CFG_PATH):
     ex_params = {
         'temperature': cp.getfloat('llm_example', 'temperature', fallback=0.5),
         'max_tokens': cp.getint('llm_example', 'max_tokens', fallback=80),
-        'prompt': cp.get('llm_example', 'prompt', fallback="You are to provide a simple example sentence using '{word}' for an Anki vocab list. Write one natural, concise and simple example sentence using '{word}', which is part of a book. Do not include any other words in the sentence which may be non-trivial. React only with the sentence. In the sense defined by the given context if any. If and only if there happen to be multiple meanings, generate multiple sentences separated by '; '")
+        'prompt': cp.get('llm_example', 'prompt', fallback="You are to provide a simple example sentence using '{word}' for an Anki vocab list. The definition is: '{definition}'. Write one natural, concise and simple example sentence that aligns with this specific meaning. Do not include any other words in the sentence which may be non-trivial. React only with the sentence. If context is provided, consider it: {context}")
     }
     return key, model, def_params, ex_params
 
@@ -86,10 +86,8 @@ def gen_definition(word, ctx=None):
         prompt += f"\ncontext: {ctx}"
     return llm_call(prompt, DEF_PARAMS['max_tokens'], DEF_PARAMS['temperature'])
 
-def gen_example(word, ctx=None):
-    prompt = EX_PARAMS['prompt'].format(word=word)
-    if ctx:
-        prompt += f"\ncontext: {ctx}"
+def gen_example(word, definition, ctx=None):
+    prompt = EX_PARAMS['prompt'].format(word=word, definition=definition, context=ctx or '')
     return llm_call(prompt, EX_PARAMS['max_tokens'], EX_PARAMS['temperature'])
 
 def load_book_text(path: Path) -> str:
@@ -122,6 +120,24 @@ def pregen_definitions(words, corpus_text, num_workers=5):
             print(f"Generated definition for '{word}' ({i}/{len(words)})")
     return pregen_defs
 
+def parse_definitions(def_text, word):
+    items = [item.strip() for item in re.split(r'^\d+\.\s*', def_text, flags=re.MULTILINE) if item.strip()]
+    if len(items) > 1:
+        split_words = []
+        for i, item in enumerate(items, 1):
+            if ':' in item:
+                parts = item.split(':', 1)
+                label = parts[0].strip('() ')
+                definition = parts[1].strip()
+                new_word = f"{word} ({label})"
+            else:
+                definition = item.strip()
+                new_word = f"{word} (sense {i})"
+            split_words.append((new_word, definition))
+        return split_words
+    else:
+        return [(word, def_text)]
+
 # ---------------------------------------------------------------------------#
 # CLI Mode                                                                  #
 # ---------------------------------------------------------------------------#
@@ -145,13 +161,14 @@ def run_cli(word_list_file, pregen_llm=False, book_file=None):
 
     for w in words:
         print(f"\nword: {w}")
-        if pregen_defs:
+        if pregen_defs and w in pregen_defs:
             d = pregen_defs[w]
             print(f"LLM definition: {d}")
         else:
             defs = fetch_definitions(w)
             if not defs:
-                defs.append(gen_definition(w, corpus))
+                ctx = "\n".join(find_contexts(corpus, w)) if corpus else None
+                defs.append(gen_definition(w, ctx))
             for i, d in enumerate(defs, 1):
                 print(f"{i}. {d}")
             choice = input("pick #, 'l' for llm def, 's' skip: ").lower().strip()
@@ -167,7 +184,8 @@ def run_cli(word_list_file, pregen_llm=False, book_file=None):
                 print("bad choice")
                 continue
 
-        ex = gen_example(w, ctx if 'ctx' in locals() else (corpus and "\n".join(find_contexts(corpus, w))))
+        ctx = "\n".join(find_contexts(corpus, w)) if corpus else None
+        ex = gen_example(w, d, ctx)
         print(f"example: {ex}")
         card_choice = input("anki card? (b)asic, (r)everse, (n)one: ").lower()
         if card_choice == 'n':
@@ -210,29 +228,43 @@ class Wizard:
         frm = ttk.Frame(root, padding=8)
         frm.grid(sticky="nsew")
         frm.columnconfigure(1, weight=1)
+        frm.rowconfigure(1, weight=1)
+        frm.rowconfigure(2, weight=1)
 
-        ttk.Label(frm, text="word").grid(row=0, column=0, sticky='w')
+        # Word entry
+        ttk.Label(frm, text="Word").grid(row=0, column=0, sticky='w')
         self.word_var = tk.StringVar()
         ttk.Entry(frm, textvariable=self.word_var, width=30).grid(row=0, column=1, sticky='ew')
 
-        self.txt = tk.Text(frm, height=12, width=120, wrap='word')
-        self.txt.grid(row=1, column=0, columnspan=3, sticky='nsew')
+        # Definition text area
+        ttk.Label(frm, text="Definition").grid(row=1, column=0, sticky='nw')
+        self.def_txt = tk.Text(frm, height=6, width=120, wrap='word')
+        self.def_txt.grid(row=1, column=1, columnspan=2, sticky='nsew')
 
+        # Example text area
+        ttk.Label(frm, text="Example").grid(row=2, column=0, sticky='nw')
+        self.ex_txt = tk.Text(frm, height=6, width=120, wrap='word')
+        self.ex_txt.grid(row=2, column=1, columnspan=2, sticky='nsew')
+
+        # Buttons
         btnfrm = ttk.Frame(frm)
-        btnfrm.grid(row=2, column=0, columnspan=3, pady=4)
-        ttk.Button(btnfrm, text="llm def", command=self.ins_llm_def).pack(side='left')
-        ttk.Button(btnfrm, text="llm example", command=self.ins_llm_ex).pack(side='left')
-        ttk.Button(btnfrm, text="append both", command=self.append_both).pack(side='left')
-        ttk.Button(btnfrm, text="reset word", command=self.reset_word).pack(side='left')
+        btnfrm.grid(row=3, column=0, columnspan=3, pady=4)
+        ttk.Button(btnfrm, text="Generate Definition", command=self.ins_llm_def).pack(side='left', padx=2)
+        ttk.Button(btnfrm, text="Generate Example", command=self.ins_llm_ex).pack(side='left', padx=2)
+        ttk.Button(btnfrm, text="Generate Both", command=self.append_both).pack(side='left', padx=2)
+        ttk.Button(btnfrm, text="Duplicate Word", command=self.duplicate_word).pack(side='left', padx=2)
+        ttk.Button(btnfrm, text="Reset Word", command=self.reset_word).pack(side='left', padx=2)
+        ttk.Button(btnfrm, text="Split Word", command=self.split_word).pack(side='left', padx=2)
 
+        # Navigation and card type
         navfrm = ttk.Frame(frm)
-        navfrm.grid(row=3, column=0, columnspan=3, pady=4, sticky='ew')
-        ttk.Button(navfrm, text="prev", command=self.prev).pack(side='left')
-        ttk.Button(navfrm, text="next", command=self.next).pack(side='left')
+        navfrm.grid(row=4, column=0, columnspan=3, pady=4, sticky='ew')
+        ttk.Button(navfrm, text="Prev", command=self.prev).pack(side='left', padx=2)
+        ttk.Button(navfrm, text="Next", command=self.next).pack(side='left', padx=2)
         self.card_type = tk.StringVar(value='b')
-        ttk.Radiobutton(navfrm, text='basic', variable=self.card_type, value='b').pack(side='left')
-        ttk.Radiobutton(navfrm, text='rev', variable=self.card_type, value='br').pack(side='left')
-        ttk.Radiobutton(navfrm, text='skip', variable=self.card_type, value='n').pack(side='left')
+        ttk.Radiobutton(navfrm, text='Basic', variable=self.card_type, value='b').pack(side='left', padx=2)
+        ttk.Radiobutton(navfrm, text='Reverse', variable=self.card_type, value='br').pack(side='left', padx=2)
+        ttk.Radiobutton(navfrm, text='Skip', variable=self.card_type, value='n').pack(side='left', padx=2)
 
         self.show()
 
@@ -243,26 +275,65 @@ class Wizard:
         return "\n".join(find_contexts(self.ctx_text, word)) if self.ctx_text else None
 
     def ins_llm_def(self):
-        self.txt.delete('1.0', 'end')
-        self.txt.insert('end', gen_definition(self.current_word(), self.ctx(self.current_word())))
+        word = self.current_word()
+        self.def_txt.delete('1.0', 'end')
+        self.def_txt.insert('end', gen_definition(word, self.ctx(word)))
 
     def ins_llm_ex(self):
-        self.txt.insert('end', '\nExample: ' + gen_example(self.current_word(), self.ctx(self.current_word())))
+        word = self.current_word()
+        definition = self.def_txt.get('1.0', 'end').strip()
+        if not definition:
+            messagebox.showwarning("Warning", "Please provide a definition first.")
+            return
+        self.ex_txt.delete('1.0', 'end')
+        self.ex_txt.insert('end', gen_example(word, definition, self.ctx(word)))
 
     def append_both(self):
         word = self.current_word()
-        d = gen_definition(word, self.ctx(word))
-        e = gen_example(word, self.ctx(word))
-        self.txt.insert('end', ('' if not self.txt.get('1.0', 'end').strip() else '\n') + d + '\n' + e)
+        ctx = self.ctx(word)
+        d = gen_definition(word, ctx)
+        self.def_txt.delete('1.0', 'end')
+        self.def_txt.insert('end', d)
+        e = gen_example(word, d, ctx)
+        self.ex_txt.delete('1.0', 'end')
+        self.ex_txt.insert('end', e)
+
+    def duplicate_word(self):
+        self.save_current()
+        self.words.insert(self.i + 1, self.current_word())
+        self.orig_words.insert(self.i + 1, self.current_word())
+        self.data.insert(self.i + 1, {})
+        self.i += 1
+        self.show()
 
     def reset_word(self):
         self.word_var.set(self.orig_words[self.i])
+
+    def split_word(self):
+        word = self.current_word()
+        def_text = self.def_txt.get('1.0', 'end').strip()
+        new_entries = parse_definitions(def_text, word)
+        if len(new_entries) > 1:
+            # Remove current word
+            del self.words[self.i]
+            del self.orig_words[self.i]
+            del self.data[self.i]
+            # Insert new words
+            for j, (new_word, definition) in enumerate(new_entries):
+                self.words.insert(self.i + j, new_word)
+                self.orig_words.insert(self.i + j, new_word)
+                self.data.insert(self.i + j, {'word': new_word, 'text': definition, 'card_type': 'b'})
+            # Show the first new word
+            self.show()
+        else:
+            messagebox.showinfo("Info", "No multiple definitions found to split.")
 
     def save_current(self):
         if self.i < len(self.words):
             self.data[self.i] = {
                 'word': self.current_word(),
-                'text': self.txt.get('1.0', 'end').strip(),
+                'text': (self.def_txt.get('1.0', 'end').strip() + '\n\n' +
+                         self.ex_txt.get('1.0', 'end').strip()).strip(),
                 'card_type': self.card_type.get()
             }
 
@@ -274,15 +345,19 @@ class Wizard:
         w = data.get('word', self.orig_words[self.i])
         self.word_var.set(w)
         text = data.get('text', '')
-        self.txt.delete('1.0', 'end')
+        self.def_txt.delete('1.0', 'end')
+        self.ex_txt.delete('1.0', 'end')
         if text:
-            self.txt.insert('end', text)
+            parts = text.split('\n\n', 1)
+            self.def_txt.insert('end', parts[0])
+            if len(parts) > 1:
+                self.ex_txt.insert('end', parts[1])
         else:
             if w in self.pregen_defs:
-                self.txt.insert('end', self.pregen_defs[w])
+                self.def_txt.insert('end', self.pregen_defs[w])
             else:
                 defs = fetch_definitions(w) or [gen_definition(w, self.ctx(w))]
-                self.txt.insert('end', defs[0])
+                self.def_txt.insert('end', defs[0])
         self.card_type.set(data.get('card_type', 'b'))
 
     def next(self):
@@ -302,6 +377,10 @@ class Wizard:
         write_anki(self.results)
         messagebox.showinfo("Done", "Anki files written; bye")
         self.root.quit()
+
+# ---------------------------------------------------------------------------#
+# Entry-Point                                                               #
+# ---------------------------------------------------------------------------#
 
 def choose_file(title, filetypes):
     return filedialog.askopenfilename(title=title, filetypes=filetypes)
@@ -343,6 +422,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.gui:
+        if 'tkinter' not in sys.modules:
+            sys.exit("tkinter missing; cannot run GUI")
         run_gui(args.pregen_llm)
     elif args.word_list:
         run_cli(args.word_list, args.pregen_llm, args.book)
