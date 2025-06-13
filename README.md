@@ -147,13 +147,3 @@ The script generates up to two files in the same directory:
 *   `anki_basic_reversed.csv`: For reversed cards.
 
 These files are formatted for direct import into Anki.
-
-### How to Import into Anki
-
-1.  Open Anki and select `File > Import...`.
-2.  Choose the generated `.csv` file.
-3.  In the import dialog:
-    *   Choose the correct **Deck** and **Note Type** (e.g., "Basic" or "Basic (and reversed card)").
-    *   Ensure "Allow HTML in fields" is **checked**.
-    *   Map `Field 1` to `Front` and `Field 2` to `Back`.
-4.  Click "Import".
